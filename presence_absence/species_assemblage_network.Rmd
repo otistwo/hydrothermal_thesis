@@ -1,0 +1,1678 @@
+---
+title: "NWP_species_assemblage_networks_2"
+author: "Otis Brunner"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '5'
+  word_document:
+    toc: yes
+    toc_depth: '5'
+  html_document:
+    number_sections: yes
+    theme: cerulean
+    toc: yes
+    toc_depth: 5
+    toc_float: yes
+---
+
+
+```{r setup, include=FALSE}
+# This saves all figures in the directory `figures` and sets the default figure size 
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figures/')
+#knitr::opts_chunk$set(echo = TRUE, fig.path = 'figures_11.05/')
+```
+
+# Hydrothermal Vent Community Assemblage Networks of the North-West Pacific
+
+**Abstract**
+
+The distribution of species among spatially isolated habitat patches supports regional biodiversity and stability, so understanding the underlying processes and structure is a key target of conservation. Although multivariate statistics can infer the connectivity processes driving species distribution, such as dispersal and habitat suitability, they rarely explore structure. Methods from graph theory, applied to distribution data, give insights into both connectivity pathways and processes by intuitively formatting the data as a network of habitat patches. We demonstrate the application of these methods to the study of connectivity and conservation using empirical data from the hydrothermal vent habitats of the Northwest Pacific as a model system. Hydrothermal vents are ‘oases’ of biological productivity and endemicity on the seafloor that are imminently threatened by anthropogenic disturbances with unknown consequences to biodiversity. Here, we describe the structure of hydrothermal vent species assemblage networks, how local and regional parameters affect their structure, and the implications for conservation. Two complementary networks were formed from an extensive species assemblage dataset: a bipartite network of species nodes linked to vent site nodes at which they are present, and a similarity network of vent site nodes linked by weighted edges based on their pairwise assemblage similarity. Using these networks, we assessed the role of individual vent sites in linking their network and identified biogeographic sub-regions. The three sub-regions and two outlying sites are separated by their spatial arrangement and local environmental filters. Both networks detected vent sites that play a disproportionately important role in regional pathways, while the bipartite network also identified key vent sites maintaining the distinct species assemblages of their sub-regions. These regional connectivity pathways provide insights into historical colonisation routes, while sub-regional connectivity pathways are of value when selecting sites for conservation and/or estimating the multi-vent impacts from proposed deep-sea mining.
+
+
+This project is (will be) linked to the following Github repository: https://github.com/otistwo/hydrothermal_thesis.git
+
+## Load Libraries
+
+```{r message=FALSE, warning=FALSE}
+
+#install.packages("devtools")  
+#install.packages("igraph")
+library(data.table)
+library(vegan)
+library(ggplot2)
+library(clustsig)
+library(reshape2)
+library(igraph)
+library(plot.matrix)
+library(sidier)
+library(pals)
+library(qdapTools)
+library(marmap)
+library(readr)
+library(tidyverse)
+library(rgdal)
+library(raster)
+library(devtools)
+
+
+#install.packages("https://cran.r-project.org/src/contrib/Archive/rnetcarto/rnetcarto_0.2.4.tar.gz", repos = NULL, type = "source", configure.args ='--host=host')
+library(rnetcarto)
+
+
+library(sp)
+library(dplyr)
+library(cluster)
+
+
+# Load the required packages
+# (vegan must be loaded after ade4 to avoid some conflicts)
+library(ape)
+
+#install.packages("packfor", repos="http://R-Forge.R-project.org")
+#library(packfor)
+
+library(tripack)
+#install.packages("spacemakeR", repos="http://R-Forge.R-project.org")
+library(spacemakeR)
+
+library(ade4)
+library(adespatial)
+library(spdep)
+library(vegan)
+
+#install.packages("AEM", repos="http://R-Forge.R-project.org")
+#library(AEM)
+
+#install.packages("PCNM", repos="http://R-Forge.R-project.org")
+#library(PCNM)
+
+library(SoDA)
+
+# Load additionnal functions
+# (files must be in the working directory)
+source("plot.links.R")
+source("sr.value.R")
+source("quickPCNM.R")
+
+```
+# The Data
+
+## Importing and formatting 
+
+Import the  presence/absence dataset formed from Nakajima et al. (2014) + Watanabe et al. (2019) +  Giguere & Tunnicliffe (2021) in the rmarkdown file 'data_creation.Rmd'
+
+
+
+
+```{r message=FALSE}
+#This is the data-set created in 'data_creation' R-project
+#old_old_pres <- read_csv("../../Data-set creation/output/site_by_species.csv")
+
+#old_pres <- read_csv("../../Data-set creation 2021/output/site_by_species.csv")
+
+#This is the up-to-date data-set created in 'data_creation 2021' R-project and updated by Thomas Giguere (TG)
+pres <- read_csv("../../Data-set creation 2021/output/site_by_species_11.05_VT.csv")
+
+#make a key for the vent names and abbreviations
+vent.key<-pres$vent
+
+#Abbreviate the Interridge vent names
+abbrev<- abbreviate(pres$vent, minlength = 4, strict = TRUE)
+
+#[Remove any special characters]
+abbrev<-str_replace_all(abbrev, "[^[:alnum:]]", "")
+
+#write vent key
+vent.key<-cbind("vent"=vent.key, "abbrev" = abbrev)
+write.csv(vent.key, "output/vent_abbreviations.csv")
+
+
+#Add the abbreviations to the dataset
+pres$vent<-abbrev
+
+
+#order  data-set by vent names for simplicity
+pres <- with(pres,  pres[order(vent) , ])
+
+#Write table of species richness (row sum) of each vent site
+
+rich<- cbind(pres$vent,rowSums(pres[,2:(length(pres)-5)]))
+#rename column names
+colnames(rich)<- c("Vent Site","Sp. Richness")
+write.csv(rich,"output/sp.rich_sites.csv",row.names = FALSE)
+
+#Take a look 
+rich
+```
+
+```{#r Check differences between old and new dataset}
+
+spec1 <- colnames(old_pres[,3:(length(old_pres)-5)])
+spec2 <- colnames(pres[,3:(length(pres)-5)])
+matched <- intersect(spec1, spec2)
+all <-  union(spec1, spec2)
+non.matched <- all[!all %in% matched]
+non.matched_old <- spec1[!spec1 %in% spec2]
+non.matched_new <- spec2[!spec2 %in% spec1]
+
+
+library(openxlsx)
+#write.xlsx(non.matched,"output/nonmatched_species.xlsx")
+
+#Check the spaecies that are in the occurence list but are not found on WoRMS
+non.matched
+```
+
+*ABOVE are all the species that were found in the old dataset but not in the current dataset*
+
+Seperate out the pres/abs matrix from the InterRidge metadata
+```{r}
+pres.meta<- pres[,(length(pres)-4):length(pres)]
+rownames(pres.meta)<-pres$vent
+
+head(pres.meta)
+```
+
+
+```{r }
+mat <- as.matrix(pres[,2:(length(pres)-5)])
+rownames(mat) <- pres$vent
+
+head(mat[,1:2])
+```
+This is a preview ofthe metadata-free matrix that most of the analyses will be carried out on
+
+
+## Depth range of species
+
+```{r}
+
+#turn matrix into columns of site, species and pres/abs
+site.sp<-melt(mat)
+
+
+#Insert the metadata values of each site
+sp.range<-merge(site.sp, pres[c(1,(length(pres)-4):length(pres))], by.x = "Var1", by.y = "vent" )
+
+#trim values to only include present species records
+sp.range<-dplyr::filter(sp.range, value == 1)
+```
+
+```{r species depth range by region }
+ggplot(sp.range, aes(x=as.factor(as.numeric(Var2)), y = Maximum.or.Single.Reported.Depth)) +
+  geom_boxplot() +
+  labs(x="Species", y = "Depth")
+
+```
+Depth Range of every species in data-set based on vent-site occurences as a 'Box and Whisker' plot. Boxes represent median and quartiles while lines extend to min and max. Points represent 'outliers' at vent sites of a very different depth from those that the species is more often found at. The small horizontal lines represent species that are only present at a single site (depth)
+
+# Similarity Analyses
+
+Calculate Sorensen's Coefficient to determine pairwise site dissimilarity. Sorensen's Coefficient gives double weight to shared presence over shared absence. 
+
+```{r Sorensens coefficient Similarity Profile}
+#Calculate Sorensens Coeeficient 
+vent.dist <- vegdist(mat, method = "bray", binary = TRUE, diag = TRUE, alpha = 0.05)
+
+
+
+```
+The script says the method is "bray" (bray-curtis) but when applied to presence-absence (binary = TRUE) is known as Sorensen's Coefficient
+
+
+## SIMPROF Clusters
+
+SIMPROF analysis carried out following the methods of Clarke et al. (2008). "czekanowski" method is also reffered to as Bray-Curtis and Sorensen's Coefficient when applied to binary data
+```{r SIMPROF}
+#Cluster communities using SIMPROF 
+simpr <- simprof(mat, method.distance = "czekanowski", num.expected = 100, num.simulated = 999, alpha = 0.05)
+
+#extract the cluster membership
+clusts<-melt(simpr$significantclusters)
+
+#rename column names
+colnames(clusts)<- c("Name","clusts")
+
+#Attach cluster identity to the pres data-set
+pres<-merge(pres, clusts, by.x = "vent", by.y = "Name")
+```
+
+
+Standardise a colour pallete based on the individual clusters for use in later plots for consistency 
+```{r SIMPROF Clustering with Sorensen}
+#Create a colour pallette
+cp.clusts=c( glasbey(length(unique(clusts$clusts))))[clusts$clusts]
+
+p1r <- simprof.plot(simpr, plot = TRUE, leafcolors = unique(cp.clusts))
+```
+Here are how the vent sites group into 13 distinct clusters that have significantly different community structures (Clarke et al., 2008)
+
+
+Check how depth and position relate to the clustering
+
+```{r cluster by IR parameters}
+
+#Plot the vents coloured by clustering
+plot( pres$Latitude, pres$Maximum.or.Single.Reported.Depth, main = "Simprof clustering", xlab = "Lat", ylab = "Depth", col = cp.clusts, pch=16, cex=2.5 )
+text(pres$Latitude, pres$Maximum.or.Single.Reported.Depth,  labels=pres$vent,  pos=3, offset=0.5)
+
+#ggplot (param, aes(x = Lattitude, y = Depth, color =as.factor (clusts))) + geom_point() + scale_colour_brewer("glasbey")
+  
+  
+```
+The many different clusters do not 
+# Similarity Network Formation
+
+Reformat the site-by-site dissimilarity matrix to work with igraph package that can analyse and 
+
+```{r Reformating the dissimilarity matrix}
+#use Similarity to represent strength of connections
+vent.sim <- 1 - vent.dist
+
+net<-graph_from_adjacency_matrix(as.matrix(vent.sim), mode = "undirected", weighted = TRUE)
+```
+
+
+
+```{r  unedited similarity network}
+#Plot NW. Pacific Metacommunity
+plot(net)
+```
+This is a plot of the **dissimilarity network with default plot settings**. It does not display the weight of the edges or any metadata associated with the nodes (vent sites)
+
+
+## Editing graph attributes
+
+At first the network has no attributes other than the vertex names. Vent site metadata can be added to all of the nodes in order to display it in plots
+```{r }
+vertex_attr_names(net)
+```
+ 
+ **Add attributes** of significance from the InterRidge data 
+```{r}
+
+#pres$Region[which(pres$vent == "DaisanKume")] <- "Okinawa Trough"
+
+#Add from param (excluding name)
+V(net)$lat<-pres$Latitude
+V(net)$long<-pres$Longitude
+V(net)$depth<-pres$Maximum.or.Single.Reported.Depth
+V(net)$tect<-pres$Tectonic.setting
+V(net)$region<-pres$Region
+V(net)$clusts<-pres$clusts 
+
+attri_table<- as.data.frame(vertex.attributes(net))
+
+vertex_attr_names(net)
+```
+
+Now plot the network but **colour the vertexes by their SIMPROF clustering**
+```{r Similarity Network coloured by SIMPROF cluster}
+
+cp.clusts=c( glasbey(length(unique(V(net)$clusts))))[(V(net)$clusts)]
+
+#Use colour pallete for clustering
+plot(net, edge.curved=.5, margin = 0, edge.arrow.size=.1, abel.dist=1.5, vertex.color=cp.clusts)
+
+#Create legend for region
+legend(x=1.3, y=1., unique(V(net)$clusts), col =unique(cp.clusts), pch=19, cex = 1, bty="n")
+```
+Plot the network but **colour the vertexes by their defined region**
+```{r Similarity Network coloured by region }
+
+#Create a colour pallette for region
+cp.region=c( glasbey(length(unique(V(net)$region))))[(as.factor(V(net)$region))]
+
+plot(net, edge.curved=.5, margin = 0, edge.arrow.size=.1, abel.dist=1.5, vertex.color=cp.region)
+
+#Create legend for region
+legend(x=1.3, y=1., unique(V(net)$region), col =unique(cp.region), pch=19, cex = 1, bty="n")
+```
+
+## Thresholded dissimilarity network
+
+Calculate the Percolation Threshold of the similarity network censu Rozenfeld et al. (2008)
+```{r, Percolation threshold under single NW. Pacific metacommunity hypothesis, results="hide"}
+
+#Transform Sorensen's coefficient matrix into a data table
+vent.dist <- as.matrix(vent.dist)
+vent.dist <- as.data.frame(vent.dist)
+
+percolations <- perc.thr(vent.dist, range = seq(0, 1, 0.0001))
+```
+Un edited plot outputs. Shows the "Percolation threshold" which is the dissimilarity value, above which the edge is removed between nodes
+```{r Percolation Threshold identification}
+perc.sum<-percolations$Summary
+perc.sum<-as.data.frame(perc.sum)
+
+plot(perc.sum[,1], perc.sum[,2], )
+
+ggplot(perc.sum, aes( x = Threshold, y = `<s>`)) +
+  geom_point(size = 0.5) +
+  labs(x = "Threshold", y = "S") +
+  ggtitle("Percolation Threshold") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5)) 
+  
+```
+
+These above plots show the S value (y-axis) which is related to the number of components in the network at each iterative threshold value (x-axis) The optimum value is the one that minimizes S and maximizes the dissimilarity threshold
+
+
+```{r  Similarity network with threshold applied}
+
+#As the threshold is calculated using dissimilarity and igraph uses similarity the cutting value is the inverse of the percolation threshold. (AKA Keep all edges that represent a similarity lower than the maximum dissimilarity threshold)
+
+perc.net <- igraph::delete.edges(net, which(E(net)$weight < 1 - percolations$`Estimated Percolation Threshold`))
+
+plot(perc.net, edge.curved=.5, edge.label=  substr(E(perc.net)$weight, 1, 4),vertex.label.color="gray28", vertex.size = 8, vertex.label.cex=0.7, vertex.label.font = 2, vertex.label.dist = 0.8, vertex.label.degree = -pi/2,  edge.arrow.size=.1, abel.dist=1.5, vertex.color=cp.clusts, layout = layout_with_kk)
+
+```
+**Used the calculated percolation threshold to cut the edges of the graph**. Coloured by SIMPROF clusters 
+
+Look at the weekest edges that remain in this Thresholded network
+```{r}
+l.net<-as_long_data_frame(perc.net)
+l.net <- with(l.net,  l.net[order(weight) , ])
+head(l.net)
+
+```
+
+```{r Thresholded Similarity network by tectonic setting}
+
+plot(perc.net, edge.curved=.5, ,vertex.label.color="gray28", vertex.size = 8, vertex.label.cex=0.7, vertex.label.font = 2, vertex.label.dist = 0.8, vertex.label.degree = -pi/2,  edge.arrow.size=.1, abel.dist=1.5, vertex.color=cp.region, layout = layout_with_kk)
+
+#Create legend for region
+legend(x=1.3, y=1., unique(V(net)$region), col =unique(cp.region), pch=19, cex = 1, bty="n")
+```
+Coloured by InterRidge region
+
+```{r, similarity network of observed thresholded}
+
+rbPal <- colorRampPalette(c('darkgrey','black'))
+
+e.col <- rbPal(10)[as.numeric(cut(E(perc.net)$weight,breaks = 10))]
+
+
+#plot it
+plot(perc.net, edge.curved=.5, margin = 0, edge.arrow.size=.1, abel.dist=1.5, vertex.color=cp.region, vertex.label=NA, vertex.size =10, layout = layout_with_fr(perc.net), edge.color = e.col)
+#Create legend for region
+legend(x=1.3, y=1., unique(V(perc.net)$region), col =unique(cp.region), pch=19, cex = 1, bty="n")
+
+```
+
+# Similarity Network Statistics
+
+## Betweenness Centrality
+
+The betweenness centrality of a node depends on the frequency it occurs within the shortest pathways between all node pairs
+```{r Betweenness Centrality - Thresholded similarity network by region and sized }
+#Calculate Betweeness Centrality for thresholded networ
+b.p.cent<-igraph::betweenness(perc.net, directed = FALSE, weights = NA)
+
+
+plot(perc.net, edge.curved=.5, ,vertex.label.color="gray28", vertex.size = b.p.cent/8, vertex.label.cex=0.7, vertex.label.font = 2, vertex.label.dist = 0.8, vertex.label.degree = -pi/2,  edge.arrow.size=.1, abel.dist=1.5, vertex.color=cp.region, layout = layout_with_kk)
+```
+Coloured by InterRidge region and sized by betweenness centrality score
+
+
+# Bipartite Network Formation
+
+Trasform the presence/absence matrix into a Bipartite network where vertices that represent species are linked to vertices that represent vent sites by an unweighted, un-directed edge.
+
+```{r reformat matrix}
+blinks <- melt(as.matrix(mat), varnames  = c("Source", "Target"))
+
+# remove all rows with weight of "0" (no presence)
+blinks <- blinks[apply(blinks!=0, 1, all),]
+
+#Remove the value column so that you simply have a list of connected nodes
+blinks <- blinks[1:2]
+
+#order links by vent names for simplicity
+blinks <- with(blinks,  blinks[order(Source) , ])
+
+```
+
+```{r simple bipartite network, results="hide"}
+
+#Transform it into a graph object
+bgraph <- graph.data.frame(blinks, directed=FALSE)
+
+#Evaluate graph object to see if it meets the criteria of a 2-node network and the 'type' used to identify between node types (sites/species)
+bipartite.mapping(bgraph)
+
+V(bgraph)$type <- bipartite_mapping(bgraph)$type
+
+V(bgraph)$color <- ifelse(V(bgraph)$type, "lightblue", "salmon")
+
+plot(bgraph,  vertex.label=NA,  vertex.size = 10)
+
+```
+Bipartite network with nodes coloured by type (species=light blue; vent site=salmon)
+```{r, Bipartite layout }
+
+plot(bgraph, layout=layout.bipartite,vertex.size=3, vertex.label=NA)
+```
+The same nodes but plotted in a bipartite format
+
+# Bipartite Network Statistics
+
+## Modularity
+
+Run netcarto on the adjacency matrix of vents and species. This first maximises the *Modularity* network by splitting the network into groups that minimizes the links between groups and maximizes those within groups through the process of *Simmulated Annealing*. It then calculates the *Universal Cartographic role* of each node based on its within and between module degree (Guimera and Amaral 2005a,b)
+```{r bipartite node details for gephi}
+#return the list of nodes and their type (species/site)
+bnodes <- igraph::as_data_frame(bgraph, what = "vertices")
+#blinks <- merge(blinks, bnodes, by.x = "Source", by.y = "name")
+
+#rename the type to vents or species
+bnodes$type <- as.character(bnodes$type)
+bnodes$type[bnodes$type == "FALSE"] <- "vent"
+bnodes$type[bnodes$type == "TRUE"] <- "species"
+
+N_bmods<-netcarto(blinks, seed = as.integer(floor(runif(1, 1, 100000001))), iterfac = 100,
+  coolingfac = 0.995, bipartite = FALSE)
+
+```
+
+Append the netcarto scores to the bgraph graph object and plot with module membership as colours
+```{r bipartite network with modules}
+#Convert the netcarto results to a data frame
+bmods<-as.data.frame(N_bmods)
+#Save original results just in case
+bmods_origi<-bmods
+
+#The Netwoks do not like spaces in the node names so replase them with '.'
+bmods$name <- gsub(" ", ".",fixed=TRUE, bmods$name)
+
+
+#extract the nodelist as it is in the graph object into a column
+bgraph.nodes<-as.list(V(bgraph))
+bgraph.nodes<-t(as.data.frame(bgraph.nodes))
+bgraph.nodes<- rownames(bgraph.nodes)
+bgraph.nodes<- as.data.frame(bgraph.nodes)
+
+#Combine module scores with the nodelist so that they are in the same order (sort = FALSE)
+bgraph.modsc <- merge(bgraph.nodes, bmods, by.x = "bgraph.nodes", by.y = "name",  sort = FALSE )
+
+#Add a 1 to module scores as some are given 0
+bgraph.modsc$module<-bgraph.modsc$module+1
+
+#Insert the module scores as a vertex attribute in the graph
+V(bgraph)$mods <- bgraph.modsc$module
+
+#Match the colours from gephi
+bg.col <- c("lightblue","purple","orange","red", "green")
+V(bgraph)$color <- bg.col[V(bgraph)$mods]
+
+plot(bgraph, vertex.size = 10, vertex.label.cex = 0.5, layout = layout_with_kk)
+
+```
+Plot of the Bipartite network with vent site and species nodes coloured by their module membership
+
+
+
+
+## Plot sim. network with bpart grouping on map
+
+Append module score, within-/between- module score  to the metadata of vent sites
+```{r add module score to percolation network}
+
+V(perc.net)$mod<-bgraph.modsc$module[1:(length(pres))]
+V(perc.net)$connectivity<-bgraph.modsc$connectivity[1:(length(pres))]
+V(perc.net)$participation<-bgraph.modsc$participation[1:(length(pres))]
+V(perc.net)$color <- (V(bgraph)$color)[1:(length(pres))]
+V(perc.net)$shape <- c("square", "circle")[as.factor(V(perc.net)$tect)]
+
+head(as.data.frame(vertex.attributes(perc.net)))
+
+```
+
+This table of metadata can be used in Gephi, a graph plotting software so export it.
+```{r, export  for gephi}
+
+#Export node table (with metadata)
+perc.attr<-as.data.frame(vertex.attributes(perc.net))
+colnames(perc.attr) [1]<- "Id"
+
+#add 'label' column
+perc.attr$Label<-perc.attr$Id
+
+#Add Centrality
+perc.attr<-cbind(perc.attr,b.p.cent)
+
+#Add species richness
+perc.attr<-cbind(perc.attr,rich)
+
+write.csv(perc.attr, "output/perc_node_table.csv", row.names = FALSE)
+
+
+
+##Export an Edgelist
+perc.links<-as_edgelist(perc.net)
+perc.links<-as.matrix(perc.links)
+perc.links<- cbind(perc.links,as.data.frame(E(perc.net)$weight))
+
+
+colnames(perc.links) <- c("Source", "Target", "Weight")
+
+write.csv(perc.links, "output/perc_net_edjelist.csv", row.names = FALSE)
+```
+The exported table 'perc_node_table.csv' is what Table 1 in the manuscript is created from
+
+
+Additionally, export the edgelist and node table of the bipartite network for use in Gephi
+```{r export bipartite edges for Gephi}
+##Export an Edgelist
+bgraph.links<-as_edgelist(bgraph)
+bgraph.links<-as.matrix(bgraph.links)
+
+
+
+colnames(bgraph.links) <- c("Source", "Target")
+
+write.csv(bgraph.links, "output/bpart_net_edjelist.csv", row.names = FALSE)
+
+```
+
+```{r export bipartite node table for Gephi }
+#Export node table (with metadata)
+bgraph.attr<-as.data.frame(vertex.attributes(bgraph))
+
+#Rename columns to match with perc.net node table
+colnames(bgraph.attr) [1]<- "Id"
+colnames(bgraph.attr) [4]<- "mod"
+bgraph.attr$label<-bgraph.attr$Id
+
+#Reformat type into 1/2
+bgraph.attr$type[bgraph.attr$type == "TRUE"] <-"1"
+bgraph.attr$type[bgraph.attr$type == "FALSE"] <-"2"
+
+
+write.csv(bgraph.attr, "output/bipart_node_table.csv", row.names = FALSE)
+
+```
+
+Plot Thresholded similarity network with module scores for color
+
+
+```{r thresh net with mods}
+
+#colour pallete for modules
+cp.module=c( glasbey(length(unique(V(perc.net)$mod))))[(as.factor(V(perc.net)$mod))]
+
+#List of module names
+#s.reg<-c("MT", "ME", "IBMa", "OT", "Su")
+s.reg<-c("OT", "IBMa", "MT", "Su", "ME")
+
+plot(perc.net, edge.curved=.5, ,vertex.label.color="gray40", vertex.size = 8, vertex.label.cex=0.7, vertex.label.font = 2, vertex.label.dist = 0.8, vertex.label.degree = -pi/2,  edge.arrow.size=.1, abel.dist=1.5, vertex.color=cp.module, layout = layout_with_kk)
+
+#Create legend for region
+legend(x=1.3, y=1., s.reg, col =unique(V(perc.net)$mod), pch=19, cex = 1, bty="n")
+
+#Plot again but sized by betweenness centrality
+plot(perc.net, edge.curved=.5, ,vertex.label.color="gray40", vertex.size = b.p.cent/8, vertex.label.cex=0.7, vertex.label.font = 2, vertex.label.dist = 0.8, vertex.label.degree = -pi/2,  edge.arrow.size=.1, abel.dist=1.5, vertex.color=cp.module, layout = layout_with_kk)
+
+#Create legend for region
+legend(x=1.3, y=1., s.reg, col =unique(V(perc.net)$mod), pch=19, cex = 1, bty="n")
+```
+
+## Contracted graph figure
+
+Create a *Contracted graph* where vent site nodes of the same module are contracted into a single node. This helps visualize the shared species
+
+Example script for combining vertices in a network can be found at https://blog.revolutionanalytics.com/2015/08/contracting-and-simplifying-a-network-graph.html
+```{r combine site nodes based on module}
+
+library(igraph)
+library(bipartite)
+library(sna)
+
+# Download prepared igraph file from github
+gs <- bgraph
+
+cl<- gs
+
+#Make an attribute of degree
+V(cl)$degree <- (igraph::degree(gs))
+
+#V(bgraph)$mods
+
+##Here I adjust the membership values so that all species are unique but vents are combined by membership
+comb.id<- c(1:(nrow(bgraph.modsc)))
+comb.id[1:(nrow(pres))] <- bgraph.modsc$module[1:(nrow(pres))]
+
+# Assign node with highest degree as name for each cluster
+V(cl)$cluster  <- unname(ave(igraph::degree(gs), comb.id, 
+                         FUN=function(x)names(x)[which.max(x)])
+)
+V(gs)$name <- V(cl)$cluster
+
+# Contract vertices
+#E(gs)$weight <- 1
+#V(gs)$weight <- 1
+
+
+
+
+
+gcon <- contract.vertices(gs, comb.id, 
+                          vertex.attr.comb = list(weight = "sum", name = function(x)x[1], "ignore"))
+
+# Simplify edges
+gcon <- igraph:::simplify(gcon, edge.attr.comb = list(weight = "sum", function(x)length(x)))
+
+gcc <- induced.subgraph(gcon, V(gcon)$weight > 20)
+
+```
+
+
+Now plot the contracted graph with Igraph to use as a figure in manuscript
+
+```{r plot contracted graph}
+
+#Remove unconnected nodes
+dgc <- decompose.graph(gcon) 
+gcon <- dgc[[1]]
+
+#layout = petersen.layout("circle")
+
+plot(gcon)
+detach("package:bipartite", unload=TRUE)
+detach("package:sna", unload=TRUE)
+```
+
+```{r export contracted graph to gephi}
+
+##Export an adjacency matrix
+cont.mat<- as_adjacency_matrix(gcon)
+cont.mat<-as.matrix(cont.mat)
+
+write.csv(cont.mat, "output/contracted_NETC_matrix.csv")
+
+##Export an Edgelist
+cont.links<-as_edgelist(gcon)
+cont.mat<-as.matrix(cont.mat)
+
+colnames(cont.links) <- c("Source", "Target")
+
+
+write.csv(cont.links, "output/contracted_NETC_edgelist.csv", row.names = FALSE)
+```
+
+
+
+
+Now it's time to plot the module score on a map (downloaded from NOAA)
+
+
+If you get this error message:
+"Error in if (ncol(x) == 3 & !exists("bathy", inherits = FALSE)) { : 
+  argument is of length zero"
+  
+You may need to update the relevant packages
+
+```{#r}
+update.packages(ask = FALSE)
+```
+
+
+
+
+
+
+```{r}
+
+#First Create a Basemap using NOAA bathymetry data
+bmap<-marmap::getNOAA.bathy(118, 150, 10, 38, resolution = 2)
+
+
+
+plot(bmap)
+```
+
+```{r, regional similarity network with bipartite modules mapped}
+#Create geographical layout for the network
+lo<-as.matrix(cbind(V(perc.net)$long,V(perc.net)$lat))
+
+# Rotation of vertex label list
+lab.deg<- 1:(length(pres)) 
+lab.deg<- lab.deg * pi
+
+#Edge colour pallete
+
+#Create a function to generate a continuous color palette
+rbPal <- colorRampPalette(c('yellow','red'))
+
+#This adds a column of color values
+# based on the y values
+e.col <- rbPal(10)[as.numeric(cut(E(perc.net)$weight,breaks = 10))]
+
+##Plot the basemap with settings taken from https://cran.r-project.org/web/packages/marmap/vignettes/marmap.pdf
+
+
+## As well as 'marmap' you now also need to install 'rgdal' and 'raster' to make this work
+
+
+# Creating a custom palette of blues [redundant without getNOAA.bathy]
+blues <- c("lightsteelblue4", "lightsteelblue3",
+"lightsteelblue2", "lightsteelblue1")
+# Plotting the bathymetry with different colors for land and sea
+plot(bmap, image = TRUE, land = TRUE, lwd = 0.1,
+bpal = list(c(0, max(bmap), "darkgreen"),
+c(min(bmap),0,blues)))
+# Making the coastline more visible
+plot(bmap, deep = 0, shallow = 0, step = 0,
+lwd = 0.4, add = TRUE)
+
+#plot the Network over the top with settings adjusted to this purpose
+plot(perc.net, layout = lo, edge.curved=.5, edge.color = e.col, margin = 0, edge.width= E(perc.net)$weight*2, edge.arrow.size=1, vertex.label = c(1:nrow(pres)) , vertex.size = 70, vertex.label.cex=0.35, vertex.label.color = "black", vertex.color = V(perc.net)$color, vertex.shape = V(perc.net)$shape, add = TRUE, rescale = FALSE, )
+
+```
+```{r}
+print(cbind(pres$vent,c(1:nrow(pres))))
+```
+
+Plot for JSPS application
+```{r regional similarity network with bipartite modules mapped__B&W}
+#Adjust the shapes and colours
+V(perc.net)$mod.shape <- c("square", "circle", "circle", "circle", "square")[as.factor(V(perc.net)$mod)]
+V(perc.net)$color <- c("darkgrey", "darkgrey", "white", "black", "white")[as.factor(V(perc.net)$mod)]
+
+#Create geographical layout for the network
+lo<-as.matrix(cbind(V(perc.net)$long,V(perc.net)$lat))
+
+# Rotation of vertex label list
+lab.deg<- 1:(length(pres)) 
+lab.deg<- lab.deg * pi
+
+#Edge colour pallete
+
+#Create a function to generate a continuous color palette
+rbPal <- colorRampPalette(c('yellow','red'))
+
+#This adds a column of color values
+# based on the y values
+e.col <- rbPal(10)[as.numeric(cut(E(perc.net)$weight,breaks = 10))]
+
+##Plot the basemap with settings taken from https://cran.r-project.org/web/packages/marmap/vignettes/marmap.pdf
+
+
+## As well as 'marmap' you now also need to install 'rgdal' and 'raster' to make this work
+
+
+# Creating a custom palette of blues
+blues <- c("lightsteelblue4", "lightsteelblue3",
+"lightsteelblue2", "lightsteelblue1")
+# Plotting the bathymetry with different colors for land and sea
+plot(bmap, image = TRUE, land = TRUE, lwd = 0.1,
+bpal = list(c(0, max(bmap), "darkgreen"),
+c(min(bmap),0,blues)))
+# Making the coastline more visible
+plot(bmap, deep = 0, shallow = 0, step = 0,
+lwd = 0.4, add = TRUE)
+
+#plot the Network over the top with settings adjusted to this purpose
+plot(perc.net, layout = lo, edge.curved=.5, edge.color = "red", margin = 0, edge.width= E(perc.net)$weight*2, edge.arrow.size=1, vertex.label = NA , vertex.size = 50, vertex.label.cex=0.35, vertex.label.color = "black", vertex.color = V(perc.net)$mod.color, vertex.shape = V(perc.net)$mod.shape, add = TRUE, rescale = FALSE, )
+
+V(perc.net)$color <- (V(bgraph)$color)[1:(length(pres))]
+
+```
+
+A map of the NWP with vent sites coloured by module, squares are Arc vents and Circles are back-arc vents. The thickness and redness of the edges represent the weight.
+
+
+```{r}
+
+#First Create a Basemap of oki using NOAA bathymetry data
+bmap<-marmap::getNOAA.bathy(120, 130, 23, 30, resolution = 1)
+```
+
+```{r Oki similarity network with bipartite modules mapped}
+
+# Creating a custom palette of blues
+blues <- c("lightsteelblue4", "lightsteelblue3",
+"lightsteelblue2", "lightsteelblue1")
+# Plotting the bathymetry with different colors for land and sea
+plot(bmap, image = TRUE, land = TRUE, lwd = 0.1,
+bpal = list(c(0, max(bmap), "darkgreen"),
+c(min(bmap),0,blues)))
+# Making the coastline more visible
+plot(bmap, deep = 0, shallow = 0, step = 0,
+lwd = 0.4, add = TRUE)
+
+#plot the Network over the top with settings adjusted to this purpose
+plot(perc.net, layout = lo, edge.curved=.5, edge.color = e.col, margin = 0, edge.width= E(perc.net)$weight*5, edge.arrow.size=1 , vertex.size = 20, vertex.label.cex=0.6, vertex.label = abbreviate(V(perc.net)$name),vertex.label.font = 2, vertex.label.color = "black", vertex.color = V(perc.net)$color, vertex.shape = V(perc.net)$shape, add = TRUE, rescale = FALSE)
+```
+```{r, Izu-bonin similarity network with bipartite modules mapped}
+
+#First Create a Basemap of oki using NOAA bathymetry data
+bmap<-marmap::getNOAA.bathy(136, 145, 33, 25, resolution = 2)
+
+# Creating a custom palette of blues
+blues <- c("lightsteelblue4", "lightsteelblue3",
+"lightsteelblue2", "lightsteelblue1")
+# Plotting the bathymetry with different colors for land and sea
+plot(bmap, image = TRUE, land = TRUE, lwd = 0.1,
+bpal = list(c(0, max(bmap), "darkgreen"),
+c(min(bmap),0,blues)))
+# Making the coastline more visible
+plot(bmap, deep = 0, shallow = 0, step = 0,
+lwd = 0.4, add = TRUE)
+
+#plot the Network over the top with settings adjusted to this purpose
+plot(perc.net, layout = lo, edge.curved=.5, edge.color = e.col, margin = 0, edge.width= E(perc.net)$weight*5, edge.arrow.size=1 , vertex.size = 20, vertex.label.cex=0.4, vertex.label = abbreviate(V(perc.net)$name),vertex.shape = V(perc.net)$shape, add = TRUE, vertex.label.color = "black", vertex.color = V(perc.net)$color, rescale = FALSE)
+```
+A map of the Okinawa with vent sites coloured by module, squares are Arc vents and Circles are back-arc vents. The thickness and redness of the edges represent the weight.
+
+```{r}
+
+#First Create a Basemap of oki using NOAA bathymetry data
+bmap<-marmap::getNOAA.bathy(136, 148, 25, 11, resolution = 2)
+
+```
+
+```{r, Mariana similarity network with bipartite modules mapped}
+
+# Creating a custom palette of blues
+blues <- c("lightsteelblue4", "lightsteelblue3",
+"lightsteelblue2", "lightsteelblue1")
+# Plotting the bathymetry with different colors for land and sea
+plot(bmap, image = TRUE, land = TRUE, lwd = 0.1,
+bpal = list(c(0, max(bmap), "darkgreen"),
+c(min(bmap),0,blues)))
+# Making the coastline more visible
+plot(bmap, deep = 0, shallow = 0, step = 0,
+lwd = 0.4, add = TRUE)
+
+#plot the Network over the top with settings adjusted to this purpose
+plot(perc.net, layout = lo, edge.curved=.5, edge.color = e.col, margin = 0, edge.width= E(perc.net)$weight*5, edge.arrow.size=1 , vertex.size = 20, vertex.label.cex=0.4, vertex.label = abbreviate(V(perc.net)$name), vertex.label.color = "black", vertex.label.dist = 0.5, vertex.label.degree = lab.deg, vertex.color = V(perc.net)$color, vertex.shape = V(perc.net)$shape, add = TRUE, rescale = FALSE)
+```
+
+A map of the Okinawa with vent sites coloured by module, squares are Arc vents and Circles are back-arc vents. The thickness and redness of the edges represent the weight.
+
+
+
+
+
+## Module descriptions
+
+plot depth distribution grouping species by module
+```{r species depth range by module }
+mod.range <- merge(sp.range, bgraph.modsc, by.x = "Var1", by.y = "bgraph.nodes")
+
+
+ggplot(mod.range, aes(x=as.character(as.numeric(Var2)), y = Maximum.or.Single.Reported.Depth)) +
+  facet_wrap(~module, scales = "free_x") +
+  geom_boxplot(aes(fill=participation)) +
+  scale_fill_continuous(type = "viridis") +
+  labs(x="Species", y = "Depth")
+```
+Depth distribution of species seperated out by the modules they are associated with. Coloured by participation coefficient (the amount they are shared between vents of different modules).
+
+Save the species key for future reference
+```{r write species key }
+sp.no<-as.character(as.numeric(mod.range$Var2))
+sp.key<- cbind(sp.no, as.character(mod.range[,2]))
+sp.key <- unique(sp.key)
+
+write.csv(sp.key,"species_key.csv")
+```
+
+
+Plot the depth range of each module by tectonic feature
+
+```{r depth range by module and tectonic setting}
+
+library(ggrepel)
+
+ggplot(perc.attr, aes(x= as.factor(region), y = depth)) +
+  geom_boxplot() +
+  geom_point() +
+    geom_label_repel(aes(label = Id), size = 1.5, segment.alpha = 0.5, box.padding	
+= 0.1, label.padding =0.1, nudge_x = 0.5) +
+    facet_wrap(~mod, scales = "free_x", nrow = 1) +
+
+
+  
+  labs(x="Module", y = "Depth") +
+  scale_x_discrete(labels=abbreviate)
+```
+
+```{r depth range by module}
+
+library(ggrepel)
+
+ggplot(perc.attr, aes(x= as.factor(mod), y = depth)) +
+  geom_boxplot() +
+  geom_point() +
+    geom_label_repel(aes(label = Id), size = 1.5, segment.alpha = 0.5, box.padding	
+= 0.1, label.padding =0.1, nudge_x = 0.5) +
+
+
+  
+  labs(x="Module", y = "Depth") +
+  scale_x_discrete(labels=abbreviate)
+```
+
+## Within/Between Module Degree 
+
+Plot the within and between module degree values in 2D adding the lines that delineate the 'universal roles'
+
+This shows the role of each vent site in terms of being a hub of connectivity for their module (Within Module Degree) and their role in connecting between modules (Participation Coeffiecient). The lines delineate four distinct roles based on these values (Guimera and Amaral, 2005)
+
+RUN IN GGPLOT
+```{r, Vent Cartographic Role}
+library(gghighlight)
+
+#Trim to only include vent nodes
+vent.modsc<- bgraph.modsc[1:(nrow(pres)),]
+
+#Match the colours from gephi by adjusting the order
+
+v.cols <- bg.col[vent.modsc$module]
+
+#PLOT
+vent.modsc %>% 
+  ggplot(aes(x = participation, y = connectivity)) +
+  
+  geom_point(aes(x = participation, y = connectivity),
+             colour = v.cols, fill = v.cols, 
+             stroke = .5, size = 3, 
+             alpha = 1, shape = 21) +
+  
+  
+    geom_label_repel( aes(label = bgraph.nodes),
+             size = 1,
+              force = 10,
+             seed = 10,
+               colour = "black",
+             fill = v.cols,
+             fontface = "bold",
+             nudge_y = 0.1) +
+
+     geom_vline(xintercept = 0.62) +
+  
+  geom_hline(yintercept = 2.5) +
+  
+  geom_text(aes(x=0.55, label="Module \n Hubs", y=3.4), colour="grey", angle=0, size=3) +
+  geom_text(aes(x=0.55, label="Periphery \n Nodes", y=2.2), colour="grey", angle=0, size=3) +
+  geom_text(aes(x=0.67, label="Network \n Hubs", y=3.4), colour="grey", angle=0, size=3) +
+  geom_text(aes(x=0.67, label="Connector \n Nodes", y=2.2), colour="grey", angle=0, size=3) +
+
+  ggtitle(" Vent Cartographic Role")+
+    theme(plot.title = element_text(hjust = 0.5))
+```
+
+Do the same for the species...
+
+
+RUN IN GGPLOT
+```{r, Species Cartographic Role}
+library(gghighlight)
+
+#Trim to only include vent nodes
+species.modsc<- bgraph.modsc[(nrow(pres)+1):(nrow(bgraph.modsc)),]
+
+v.cols <- bg.col[species.modsc$module]
+
+#Add species Key for plotting
+
+species.modsc<-cbind(sp.key = c(1:nrow(species.modsc)),species.modsc)
+
+#PLOT
+species.modsc %>% 
+  ggplot(aes(x = participation, y = connectivity)) +
+  
+  geom_point(aes(x = participation, y = connectivity),
+             colour = v.cols, fill = v.cols, 
+             stroke = .5, size = 3, 
+             alpha = 1, shape = 21) +
+  
+  
+    geom_label_repel( aes(label = sp.key),
+             size = 1,
+              force = 10,
+             colour = "black",
+             fill = v.cols,
+             seed = 10,
+             fontface = "bold",
+             nudge_y = 1) +
+
+     geom_vline(xintercept = 0.62) +
+  
+  geom_hline(yintercept = 2.5) +
+  
+  geom_text(aes(x=0.55, label="Module \n Hubs", y=3.4), colour="grey", angle=0, size=3) +
+  geom_text(aes(x=0.55, label="Periphery \n Nodes", y=2.2), colour="grey", angle=0, size=3) +
+  geom_text(aes(x=0.67, label="Network \n Hubs", y=3.4), colour="grey", angle=0, size=3) +
+  geom_text(aes(x=0.67, label="Connector \n Nodes", y=2.2), colour="grey", angle=0, size=3) +
+
+  ggtitle(" Species Cartographic Role")+
+    theme(plot.title = element_text(hjust = 0.5))
+```
+Write the Species Key to identify them
+```{r}
+write.csv(species.modsc, "output/species_key_mod.scores.csv")
+
+```
+
+```{r}
+#First Create a Basemap using NOAA bathymetry data
+bmap<-marmap::getNOAA.bathy(116, 152, 8, 37, resolution = 2)
+
+```
+
+## Map Plotting
+
+```{r extract node and edge position data for use in ggplot}
+g = perc.net
+
+#get the node coordinates
+plotcord <- data.frame(cbind(perc.attr[,3],perc.attr[,2]))
+row.names(plotcord)<-perc.attr$Id
+colnames(plotcord) = c("X1","X2")
+
+
+
+#get edges, which are pairs of node IDs
+edgelist <- get.edgelist(g)
+
+#convert to a four column edge data frame with source and destination coordinates
+edges <- data.frame(plotcord[edgelist[,1],], plotcord[edgelist[,2],])
+
+#Add edge weights
+edges<- cbind(edges, as.data.frame(e.col))
+colnames(edges) <- c("X1","Y1","X2","Y2","Z")
+
+#Add labels to points
+plotcord<-cbind(vlabs = as.character(row.names(plotcord)),plotcord)
+
+```
+
+```{r plot nodes and edges in ggplot}
+
+
+ggplot() + geom_curve(aes(x=X1, y=Y1, xend = X2, yend = Y2, color=Z), data=edges, size = 0.5, colour=e.col, curvature = 0.4) +
+  
+geom_point(aes(X1, X2), data=plotcord,colour = "black", fill = V(perc.net)$color, pch=21, stroke = .5, size = 3, alpha = 1, shape = 16)
+```
+
+
+```{r plot with basemap in ggplot}
+library(ggplot2)
+library(mapdata)
+#devtools::install_github("yutannihilation/ggsflabel")
+library(ggsflabel)
+library(gghighlight)
+library(metR)
+
+# convert bathymetry to data frame
+bf = marmap:::fortify.bathy(bmap)
+
+# get regional polygons
+reg = map_data("world2")
+
+bg.col <- c("orange","purple","lightblue","green", "red")
+v.cols <- bg.col[vent.modsc$module]
+v.cols<-as.factor(v.cols)
+
+# set map limits 
+lons = c(117, 151)
+lats = c(9, 36)
+
+ggplot() + 
+  
+       # add 200m contour
+  geom_contour_fill(data = bf, 
+               aes(x=x, y=y, z=z),
+               breaks=seq(0, -11000,- 200),
+               size=c(0.1)) +
+     
+    # add coastline
+  geom_polygon(data = reg, aes(x = long, y = lat, group = group), 
+               fill = "darkgreen", color = NA)+
+  
+  geom_curve(aes(x=X1, y=Y1, xend = X2, yend = Y2, color=Z), data=edges, size = 0.5, colour=e.col, curvature = 0.4) +
+  
+geom_point(aes(X1, X2), data=plotcord,colour = "black", fill = v.cols, pch=21, stroke = .5, size = 3, alpha = 1, shape = 16) +
+  
+
+  
+   #focus on a region of interest
+    coord_sf(xlim = c(118, 150), ylim = c(10, 35))
+```
+
+
+```{r label repel with basemap in ggplot}
+ggplot() + 
+  
+       # add 200m contour
+  geom_contour_fill(data = bf, 
+               aes(x=x, y=y, z=z),
+               breaks=seq(0, -11000,- 200),
+               size=c(0.1)) +
+     
+    # add coastline
+  geom_polygon(data = reg, aes(x = long, y = lat, group = group), 
+               fill = "darkgreen", color = NA)+
+  
+  geom_curve(aes(x=X1, y=Y1, xend = X2, yend = Y2, color=Z), data=edges, size = 0.5, colour=e.col, curvature = 0.4) +
+  
+geom_point(aes(X1, X2), data=plotcord,colour = "black", fill = v.cols, pch=21, stroke = .5, size = 3, alpha = 1, shape = 16) +
+  
+   geom_label_repel(data = plotcord, mapping = aes(x = X1, y = X2, label = vlabs),
+             size = 0.7,
+             force = 10,
+             colour = "black",
+             fill = v.cols,
+             seed = 10,
+             fontface = "bold",
+             nudge_y = 1,
+             nudge_x = 1,
+             max.overlaps = 20)  +
+  
+
+  
+   #focus on a region of interest
+    coord_sf(xlim = c(118, 150), ylim = c(10, 35))
+```
+
+```{r Oki_label repel with basemap in ggplot}
+ggplot() + 
+  
+       # add 200m contour
+  geom_contour_fill(data = bf, 
+               aes(x=x, y=y, z=z),
+               breaks=seq(0, -11000,- 200),
+               size=c(0.1)) +
+     
+    # add coastline
+  geom_polygon(data = reg, aes(x = long, y = lat, group = group), 
+               fill = "darkgreen", color = NA)+
+  
+  geom_curve(aes(x=X1, y=Y1, xend = X2, yend = Y2, color=Z), data=edges, size = 0.5, colour=e.col, curvature = 0.4) +
+  
+geom_point(aes(X1, X2), data=plotcord,colour = "black", fill = v.cols, pch=21, stroke = .5, size = 3, alpha = 1, shape = 16) +
+  
+   geom_label_repel(data = plotcord, mapping = aes(x = X1, y = X2, label = vlabs),
+             size = 3,
+             force = 10,
+             colour = v.cols,
+             fill = "white",
+             seed = 10,
+             fontface = "bold",
+             nudge_y = 1,
+             max.overlaps = 20)  +
+  
+
+  
+   #focus on a region of interest
+    coord_sf(xlim = c(120, 130), ylim = c(23, 30))
+```
+
+```{r Izu-Bonin_label repel with basemap in ggplot}
+ggplot() + 
+  
+       # add 200m contour
+  geom_contour_fill(data = bf, 
+               aes(x=x, y=y, z=z),
+               breaks=seq(0, -11000,- 200),
+               size=c(0.1)) +
+     
+    # add coastline
+  geom_polygon(data = reg, aes(x = long, y = lat, group = group), 
+               fill = "darkgreen", color = NA)+
+  
+  geom_curve(aes(x=X1, y=Y1, xend = X2, yend = Y2, color=Z), data=edges, size = 0.5, colour=e.col, curvature = 0.4) +
+  
+geom_point(aes(X1, X2), data=plotcord,colour = "black", fill = v.cols, pch=21, stroke = .5, size = 3, alpha = 1, shape = 16) +
+  
+   geom_label_repel(data = plotcord, mapping = aes(x = X1, y = X2, label = vlabs),
+             size = 3,
+             force = 10,
+             colour = v.cols,
+             fill = "white",
+             seed = 10,
+             fontface = "bold",
+             nudge_y = 1,
+             max.overlaps = 20)  +
+  
+
+  
+   #focus on a region of interest
+    coord_sf(xlim = c(136, 145), ylim = c(22, 33))
+```
+
+```{r Mariana_label repel with basemap in ggplot}
+ggplot() + 
+  
+       # add 200m contour
+  geom_contour_fill(data = bf, 
+               aes(x=x, y=y, z=z),
+               breaks=seq(0, -11000,- 200),
+               size=c(0.1)) +
+     
+    # add coastline
+  geom_polygon(data = reg, aes(x = long, y = lat, group = group), 
+               fill = "darkgreen", color = NA)+
+  
+  geom_curve(aes(x=X1, y=Y1, xend = X2, yend = Y2, color=Z), data=edges, size = 0.5, colour=e.col, curvature = 0.4) +
+  
+geom_point(aes(X1, X2), data=plotcord,colour = "black", fill = v.cols, pch=21, stroke = .5, size = 3, alpha = 1, shape = 16) +
+  
+   geom_label_repel(data = plotcord, mapping = aes(x = X1, y = X2, label = vlabs),
+             size = 3,
+             force = 10,
+             colour = v.cols,
+             fill = "white",
+             seed = 10,
+             fontface = "bold",
+             nudge_y = 1,
+             max.overlaps = 20)  +
+  
+
+  
+   #focus on a region of interest
+    coord_sf(xlim = c(136, 148), ylim = c(11, 25))
+```
+# Post-hoc analysis
+
+Format the datasets for analyses following the methods outlined in 'Numerical Ecology with R' (the Orbid mite example)
+
+## Formatting
+```{r}
+
+vent<- as.data.frame(mat)
+vent.env<- attri_table[c(4:6)]
+vent.ll<- attri_table[c(3,2 )]
+
+#Translate degree coordinates into Cartesian with the resultant unit being km
+vent.xy<- geoXY(vent.ll$long,vent.ll$lat, unit = 1000)
+vent.xy<-as.data.frame(vent.xy)
+vent.xy<-vent.xy[c(2,1 )]
+
+# Transform the data
+vent.h <- decostand (vent, "hellinger")
+vent.xy.c <- scale(vent.xy, center=TRUE, scale=FALSE)
+
+```
+
+## nMDS
+Community positioning plotted with depth and tectonic setting 
+
+```{r, results="hide"}
+nmds<-metaMDS(vent, distance = "bray")
+```
+
+
+```{r, Plot nMDS}
+
+data.scores <- as.data.frame(scores(nmds))  #Using the scores function from vegan to extract the site scores and convert to a data.frame
+data.scores$site <- rownames(nmds)  # create a column of site names, from the rownames of data.scores
+data.scores$Tectonic_setting <- as.factor(vent.env$tect)  #  add the grp variable 
+data.scores$Depth <- vent.env$depth  #  add the depth variable 
+data.scores$module <- as.factor(perc.attr$mod)  #  add the module score
+data.scores$vent <- rownames(data.scores) #Add the names of vents as a variable
+head(data.scores)  #look at the data
+
+```
+
+
+
+```{r NMDS }
+#TODO: Adjust labels and neaten up this plot
+
+
+ggplot(data=data.scores) + 
+  geom_text(aes(x=NMDS1,y=NMDS2,label=vent),alpha=0.5) +  # add the species labels
+  geom_point(aes(x=NMDS1,y=NMDS2,shape=Tectonic_setting,colour=Depth),size=3) +  # add the point markers
+  scale_color_gradientn(colours = rainbow(5)) +
+  coord_equal() +
+  theme_bw()
+
+```
+
+
+Can clearly see the three groups with Mariana Back-arc being most closely associated and Izu-Bonin-Mariana being most loosley associated as well as Sumisu being an outlier
+
+Look at the centroid dispersion for tectonic dispersal
+```{r NMDS by tectonic setting}
+##TODO: Fix Ellipses
+
+
+ggplot(data.scores) + 
+   # add the species labels
+  geom_text(aes(x=NMDS1,y=NMDS2,label=vent),alpha=0.5) + 
+  # add the point markers
+  geom_point(aes(x=NMDS1,y=NMDS2,shape=module,colour=Tectonic_setting),size=3) +
+  #Add elipses
+      stat_ellipse(aes(x=NMDS1,y=NMDS2,colour=Tectonic_setting),level = 0.50) +
+  coord_equal() +
+  theme_bw()
+
+
+```
+
+Now look at the Modules within the NMDS
+```{r NMDS with modules}
+
+
+
+ggplot(data.scores) + 
+   # add the species labels
+  geom_text(aes(x=NMDS1,y=NMDS2,label=vent),alpha=0.5) + 
+  # add the point markers
+  geom_point(aes(x=NMDS1,y=NMDS2,shape=Tectonic_setting,colour=module),size=3) +
+  #Add elipses
+      stat_ellipse(aes(x=NMDS1,y=NMDS2,colour=module),level = 0.50) +
+  coord_equal() +
+  theme_bw()
+
+
+```
+
+## Depth correlogram
+
+
+Spatial correlogram (based on Moran's I)
+
+ Search for neighbours of all points within a radius of 2100km and multiples (i.e., 0 to 300km, 300 to 600 km, ...). **Sites form a fully connected network at ~1360km and above** (below which Okinawa Trough sites are seperate).
+```{r univariate correlogram}
+
+quartz(title="Linkage map")
+
+#12.7 = percolation threshold
+nb1 <- dnearneigh(as.matrix(vent.xy), 0, 300)
+summary(nb1)
+
+```
+
+```{r linkage at 300km}
+plot.links(vent.xy, thresh=300)
+
+```
+Here are the links between vent sites if there are straight line connections up to 300km
+
+
+Check if depth is correlated to spatial position based on the above linkage distances
+```{r Correlogram of depth}
+
+depth <- vent.env$depth
+depth.correlog <- sp.correlogram(nb1, depth, order=6, method="I", style = "W",	zero.policy=TRUE)
+print(depth.correlog, p.adj.method="holm")
+```
+```{r  depth correlog}
+plot(depth.correlog)
+```
+Depth Correlogram Interpretation: There is no significant correlation between depth and distance at any of the scales so can be considered spatially independent in regards to depth.
+
+## Multivariate Correlogram of species composition
+
+Check for a spatial correlation with vent site community dissimilarity. 
+
+Run with default settings (distance class determined by Sturges equation)
+```{r  community correlogram}
+(vent.correlog <- mantel.correlog(vent.dist, XY=vent.xy, nperm=999))
+summary(vent.correlog)
+```
+
+Multiply distance classes by 100 to get the value in kilometers
+```{r Community correlogram}
+
+#quartz(title="Mantel correlogram of vent data")
+plot(vent.correlog)
+```
+There is a significant positive correlation between site dissimilarity and distance at and below distance class 2 (when vents at and below 346km distance apart are connected). Below is what this network would look like:
+
+```{r links at significant distance class}
+plot.links(vent.xy, thresh=346)
+```
+At a much greater distance of 1186.7km the difference between sites become negatively correlated to distance. This means that sites a number of this size step away are more similar than those just one step away at this distance
+```{r links at non-significant distance class}
+plot.links(vent.xy, thresh=1186.7)
+```
+
+Run again but with custom distance classes based on the previous univariate correlog of depth
+```{r}
+bp<- seq(300, 2100, length.out=7)
+```
+
+```{r, warning=FALSE, message=FALSE}
+(vent.correlog <- mantel.correlog(vent.dist, XY=vent.xy, nperm=999, break.pts = bp))
+summary(vent.correlog)
+```
+Check the distance classes being used
+```{r mantel custom features}
+# Number of classes
+vent.correlog$n.class # or: vent.correlog[2]
+# Break points
+vent.correlog$break.pts # or: vent.correlog[3]
+```
+
+```{r multivariate correlogram with custom distance classes}
+
+#quartz(title="Mantel correlogram of vent data")
+plot(vent.correlog)
+```
+The results are very similar
+
+
+## Principle Coordinates 
+Reduce Sorensens distance matrix to its principle coordinates (PCoA)
+```{r Principle Coordinates (2D) of Sorensens distance, echo=FALSE}
+
+pco<-pcoa(vent.dist, rn= pres$vent)
+
+
+pco.val<-pco$values
+
+
+pco.vect<- as.data.frame(pco$vectors)
+pco.vect$vent<-pres$vent
+pco.vect$Tectonic_setting<-pres$Tectonic.setting
+
+
+pco.vect %>% 
+  ggplot(aes(x=Axis.1, y=Axis.2)) +
+
+  geom_point(aes(x=Axis.1, y=Axis.2, shape = Tectonic_setting, colour = )) +
+  geom_label_repel(aes(label = vent),
+             size = 1,
+             fontface = "bold",
+             nudge_y = 0.1)
+
+
+```
+The amount of variation in the community explained by the 1st Axis is  35% (from 34% with TG update)
+```{r}
+ pco.val[1,2]
+```
+
+## Distance-based Moran's Eigenvector Maps
+
+dbMEMs are a way to distill the geographical position of each site into a parameter that can be used in further analysis that aren't able to compare matrices. 
+
+First re-order the data-sets so that they are in two groups, Oki vents first and then the rest. This is necessary to create a dbMEM that does not connect across the two groups (informed by above analyses)
+```{r re-order data-sets}
+
+#re order vents so that the first 8 are OKI vents (re order by longitude)
+
+basin.pres  <- with(pres,  pres[order(Longitude) , ])
+basin.mat <- as.matrix(basin.pres[,2:(length(pres)-5)])
+basin.vent<- as.data.frame(basin.mat)
+
+basin.vent.nodes<- with(attri_table,  attri_table[order(long) , ])
+
+basin.vent.env<- basin.vent.nodes[c(4:6)]
+basin.vent.ll<- basin.vent.nodes[c(2,3 )]
+
+
+```
+
+Create two different dbMEM. The first is created with the default settings that will connect all vent sites in the network. The second explicitly disconnects Okinawa from the Izu-Bonin-Mariana region (as informed by Mitarai et al., 2016)
+
+```{r create the dbMEM}
+#Dictate the number of sites in each spatial group (Oki and I-B-M)
+nsites.per.group <- c((length(pres[which(pres$Region == "Okinawa Trough")])+1),(length(pres[which(pres$Region != "Okinawa Trough")])-1))
+
+dbmem2<-create.dbMEM.model(coord = basin.vent.ll, D.mat = NULL, nsites = nsites.per.group)
+
+dbmem1<-create.dbMEM.model(coord = basin.vent.ll, D.mat = NULL, nsites = (nrow(pres)))
+
+dbmem2
+
+
+```
+
+```{r  dbMEM, echo=FALSE, eval=FALSE}
+
+
+dbmem.2<-dbmem(basin.vent.ll, MEM.autocor = "non-null", silent = FALSE, store.listw = TRUE)
+
+
+dbmem.1<-dbmem(basin.vent.ll)
+
+listw<-attributes(dbmem.2)$listw
+dbmem.2
+
+
+```
+
+```{#r dbMEM plots, ECHO=FALSE}
+
+s.value(basin.vent.ll, dbmem.2[,1:3])
+
+test <- moran.randtest(dbmem.2, nrepet = 99)
+plot(test$obs, attr(dbmem.2, "values"), xlab = "Moran's I", ylab = "Eigenvalues")
+
+plot(test$obs, xlab="MEM rank", ylab="Moran's I")
+abline(h=-1/(nrow(basin.vent.ll) -1), col="red")
+```
+
+Plot the groups as a map to make sure it's correct
+
+```{r dbMEM groups}
+# Draw a map to check the coding of the sites into the groups
+ site.codes <- unlist(apply(cbind(1:2),1,n=nsites.per.group,function(a,n) rep(a,n[a])))
+
+ ggplot(basin.vent.ll, aes(x = long, y = lat)) +
+   geom_point(aes(color = site.codes))
+```
+Here you can see the two unconnected groups as defined in the custom dbMEM 
+
+## Redundancy Analysis
+
+```{r}
+
+vent.rda<- rda(basin.vent,   dbmem2)
+vent.rda
+(R2 <- RsquareAdj(vent.rda)$r.squared)
+```
+
+
+## Variance Partitioning
+
+```{r variance partitioning betwween depth(X1), fine-spatial(X2), broad-spatial (X3)}
+# Partition Bray-Curtis dissimilarities
+varp_vent<-varpart(vegdist(basin.vent), basin.vent.env$depth, dbmem2, dbmem1)
+
+varp_vent
+plot (varp_vent, digits = 1, Xnames = c('depth', 'f-spatial', 'b-spatial'), bg = c('blue', 'tomato', 'green'))
+```
+
+
+
+This is the amount of species assemblage variance that can be predicted (56%) by depth, 'fine-scale' dbMEM and 'broad-scale' dbMEM
+
+
+```{r variance partitioning betwween tectonic setting(X1), fine-spatial(X2), broad-spatial (X3)}
+# Partition Bray-Curtis dissimilarities
+varp_vent<-varpart(vegdist(basin.vent), as.numeric(as.factor(basin.vent.env$tect)), dbmem2, dbmem1)
+
+varp_vent
+plot (varp_vent, digits = 1, Xnames = c('tectonic setting', 'f-spatial', 'b-spatial'), bg = c('blue', 'tomato', 'green'))
+```
+
+```{r variance partitioning betwween depth(X1), tectonic setting(X2), broad-spatial (X3)}
+# Partition Bray-Curtis dissimilarities
+varp_vent<-varpart(vegdist(basin.vent), basin.vent.env$depth, as.numeric(as.factor(basin.vent.env$tect)), dbmem1)
+
+varp_vent
+plot (varp_vent, digits = 1, Xnames = c('depth', 'tectonic setting', 'b-spatial'), bg = c('blue', 'tomato', 'green'))
+```
+
+
+```{r variance partitioning between depth and tectonic setting(X1), fine-spatial(X2), broad-spatial(X3)}
+# Partition Bray-Curtis dissimilarities
+varp_vent<-varpart(vegdist(basin.vent), basin.vent.env[1:2], dbmem2, dbmem1)
+
+varp_vent
+plot (varp_vent, digits = 1, Xnames = c('depth & tectonic', 'f-spatial', 'b-spatial'), bg = c('blue', 'tomato', 'green'))
+```
+
+
+## Redundancy analysis of parameters against module grouping
+
+
+```{r }
+
+#Combine module score with envrionmental attributes
+datum<-merge(basin.vent.nodes, bgraph.modsc, by.x= "name", by.y="bgraph.nodes")
+
+#test which vent characteristics are important to a vent’s position in the degree space. using the module score dissimilarity ~ characteristics formula
+module2distance<- rda(datum$module ~  dbmem2 *datum$depth * datum$tect)
+
+module2distance
+
+
+(R2 <- RsquareAdj(module2distance)$r.squared)
+
+```
+
+```{r }
+
+
+#test which vent characteristics are important to a vent’s position in the degree space. using the module score dissimilarity ~ characteristics formula
+module2distance<- rda(datum$module ~  datum$tect * dbmem2)
+
+module2distance
+
+#points(module2distance, cex = 0.1, pch=16, col = datum$mod.f.x,)
+
+(R2 <- RsquareAdj(module2distance)$r.squared)
+
+```
+
+```{r explanation of variation (rda)}
+library(ade4)
+var_exp<-varpart(datum$module,  datum$depth , as.numeric(as.factor(datum$tect)), dbmem2)
+
+
+
+var_exp
+```
+
+
+```{r adonis interacting with dbMEM}
+
+adonis(datum$module ~   dbmem2 * datum$depth * datum$tect  , perm =9999)
+
+
+```
+
+```{r adonis re-written}
+
+#adonis(vent.dist ~   dbmem2 * datum$depth * datum$tect,  perm =999)
+
+
+```
+
+
+
+# Sub-regional analyses
+
+Carry out the same analyses but for each individual sub-region of the North-West Pacific as detected by the Bipartite Modularity (and supported by the other analyses)

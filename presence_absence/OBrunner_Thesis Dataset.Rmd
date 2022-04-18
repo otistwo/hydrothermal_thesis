@@ -1,0 +1,521 @@
+---
+title: "OBrunner_Thesis Dataset"
+author: "Otis Brunner"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    number_sections: yes
+    theme: cerulean
+    toc: yes
+    toc_depth: 5
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '5'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figures/')
+```
+
+```{r libraries, results='hide'}
+library(sp)
+library(rgdal)
+library(dplyr)
+library(maptools)
+library(maps)
+library(devtools)
+library(ggmap)
+library(marmap)
+library(sf)
+library(raster)
+library(readr)
+library(reshape)
+library(spaa)
+library(fuzzySim)
+library(readxl)
+library(plyr)
+library(worms)
+```
+# Data-sets
+
+**Data-sets all downloaded on 2020/11/26**
+
+BISMaL data downloaded at https://www.godac.jamstec.go.jp/bismal/e/occurrences
+See README for details on how it was downloaded (Latittude: 6 - 36; Longitude: 120 - 150)
+
+InterRidge dataset downloaded from https://doi.pangaea.de/10.1594/PANGAEA.917894?format=html#download
+
+SFDVENT database downloaded at https://onlinelibrary.wiley.com/doi/full/10.1111/geb.12975
+
+```{r Import}
+
+bis_origi <- read.csv("data/BISMaL_DwC20201126101643.csv")
+
+taxa_origi <- read.csv("data/geb12975-sup-0007-supinfo2.csv")
+
+vent_origi <- read.csv("data/vent_fields_all_20200325cleansorted.csv")
+```
+
+##Clean columns
+
+Remove variables (columns) from original data-sets that aren't needed
+```{r Trim Columns}
+#Create new datasets with only target variables (columns)
+taxa <- taxa_origi[c ("Taxon","Family", "Genus","Species")]
+
+
+bis <- bis_origi [c ("scientificName","family","genus","specificEpithet", "locality", "decimalLatitude", "decimalLongitude", "eventDate", "fieldNumber", "institutionCode", "datasetName", "basisOfRecord", "references", "occurrenceID", "catalogNumber", "recordNumber", "recordedBy", "BISMaLtaxonID")]
+
+vent <- vent_origi [c ("Name.ID", "Latitude" , "Longitude", "Region", "Maximum.or.Single.Reported.Depth" , "Tectonic.setting")]
+
+```
+# Spatialize
+
+## Map BISMaL samples
+
+Transform the bismal dataframe into spatial points that can be plotted against a basemap of NOAA Bathymetry
+```{r Spatialise BISMaL data}
+coords_bis<- bis [c("decimalLongitude","decimalLatitude")]
+sd_bis <- st_as_sf(bis, coords = c("decimalLongitude","decimalLatitude"), crs = 4326)
+```
+
+Create a basemap from NOAA bathymetry, designating the region of interest, resolution and colour pallete
+```{r Basemap creation}
+#First Create a Basemap using NOAA bathymetry data
+bmap<-marmap::getNOAA.bathy(118, 150, 12, 35, resolution = 2)
+
+# Creating a custom palette of blues
+blues <- c("lightsteelblue4", "lightsteelblue3",
+"lightsteelblue2", "lightsteelblue1")
+```
+
+
+
+Plot all of the sample points from the downloaded Bismal dataset against the basemap
+```{r Map original BISMal points}
+
+# Plotting the bathymetry with different colors for land and sea
+plot(bmap, image = TRUE, land = TRUE, lwd = 0.1,
+bpal = list(c(0, max(bmap), "darkgreen"),
+c(min(bmap),0,blues)))
+
+# Making the coastline more visible
+plot(bmap, deep = 0, shallow = 0, step = 0,
+lwd = 0.4, add = TRUE)
+
+#Add the Bismal sample points to the basemap
+points(coords_bis, cex = 0.2, pch = 16)
+```
+While Longitudinal transects are clear, it is also possible to see clustering of sample points along volcanic arcs and back-arcs where targeted hydrothermal vent sampling has been carried out
+
+
+## Map InterRidge 3.4
+
+Now add the information from InterRidge by also transforming that dataframe into spatial points
+```{r Spatialise InterRidge data}
+coords_IR<- vent [c("Longitude","Latitude")]
+sd_IR <- st_as_sf(vent, coords = c("Longitude","Latitude"), crs = 4326)
+```
+
+The InterRidge data includes global vents so trim them to the extent of the NWP manually to exlude all vent points outside of the NWP
+```{r match IR and bis}
+e <- extent(raster(xmn = 118, xmx = 150, ymn = 10, ymx = 35))
+sd_IR<-st_crop(sd_IR, e)
+st_crs(sd_IR) = st_crs(sd_bis)
+```
+
+Now plot the vent sites from InterRidge and sample locations from Bismal together over the NOAA basemap
+```{r Map of original Bis data and Vent Sites, NWP}
+
+plot(bmap, image = TRUE, land = TRUE, lwd = 0.1,
+bpal = list(c(0, max(bmap), "darkgreen"),
+c(min(bmap),0,blues)))
+# Making the coastline more visible
+plot(bmap, deep = 0, shallow = 0, step = 0,
+lwd = 0.4, add = TRUE)
+
+plot(st_geometry(sd_IR), col = sf.colors(12, categorical = TRUE), border = 'grey', 
+     axes = TRUE, add = TRUE)
+plot(st_geometry(st_centroid(sd_IR)), pch = 3, col = 'red', add = TRUE)
+plot(sd_bis,pch = 16, cex = 0.1, col = 'black', add=TRUE)
+```
+
+Now plot using ggplot to give more flexibility
+
+```{r Map N.Oki vent sites labelled}
+library(ggplot2)
+library(mapdata)
+#devtools::install_github("yutannihilation/ggsflabel")
+library(ggsflabel)
+library(gghighlight)
+
+
+# convert bathymetry to data frame
+bf = fortify.bathy(bmap)
+
+# get regional polygons
+reg = map_data("world2")
+reg = subset(reg, region %in% c('Japan', 'Mariana', 'China'))
+
+
+# set map limits 
+lons = c(118, 150)
+lats = c(10, 35)
+
+
+
+# make plot
+ggplot()+
+
+     
+    # add coastline
+  geom_polygon(data = reg, aes(x = long, y = lat, group = group), 
+               fill = "darkgreen", color = NA) + 
+  
+   # add 100m contour
+  geom_contour(data = bf, 
+               aes(x=x, y=y, z=z),
+               breaks=seq(-100, -2000,- 150),
+               size=c(0.3),
+               colour="lightgrey")+
+  
+  
+  
+
+  # add vent points
+  geom_point(data = vent, aes(x = Longitude, y = Latitude),
+             colour = "black", fill = "red", 
+             stroke = .5, size = 3, 
+             alpha = 1, shape = 21)+
+  
+    # add sample points
+  geom_point(data = bis, aes(x = decimalLongitude, y = decimalLatitude),
+             colour = "orange", 
+             stroke = .1, size = 1, 
+             alpha = .1, shape = 16)+
+  #Label the vents
+  geom_label(data = vent, aes(x = Longitude, y = Latitude, label = Name.ID),
+             size = 2,
+             fontface = "bold",
+             nudge_y = 0.1) +
+  
+  #add sample labels but be careful not to include too many samples by for example only labelling a subset of the data that is in the region "Okinawa Trough"
+  geom_sf_label_repel(data = subset(sd_IR, Region  == "Okinawa Trough"), aes(label = Name.ID),
+             size = 1,
+             fontface = "bold",
+             nudge_y = 0.1) +
+  
+
+
+  #focus on a region of interest e.g. Higashi-Ensei
+    #coord_sf(xlim = c(126, 129), ylim = c(26, 29), expand = FALSE) +
+     
+  
+   #focus on a region of interest e.g. Yokosuka
+    coord_sf(xlim = c(125, 128.7), ylim = c(25.5, 29), expand = FALSE) +
+      
+    theme_classic() +
+  
+  labs(
+    x = "Long.",              # x axis title
+    y = "Lat."  # y axis title
+
+  )+
+
+ 
+  
+  ggtitle("Northern Okinawa InterRidge Vents and Bismal samples")+
+    theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+## Create a Buffer around InterRidge vent sites
+
+To match occurences from Bismal to vent sites we will do this by spatially joining the data from  InterRidge with any Bismal samples that occur within 5km of the InterRidge vent records.
+
+To create a 5km buffer, we need to project the lat/long of the bismal and IR points into WGS84 using zone 52N (roughly central to the study region). Additionally the other spatial features of country shapes and bathymetry lines need to be projected
+```{r Transform spatial points to metric coordinate system}
+
+IR_km = st_transform(sd_IR, "+proj=utm +zone=52N +datum=WGS84 +units=km")
+bis_km = st_transform(sd_bis, "+proj=utm +zone=52N +datum=WGS84 +units=km")
+
+#Convert Bathymetry contours and country shapefiles for plotting
+
+#Countries
+sd_reg<-st_as_sf(reg, coords = c("long","lat"), crs = 4326)
+#Project into WGS84
+reg_km = st_transform(sd_reg, "+proj=utm +zone=52N +datum=WGS84 +units=km")
+#Transform 'geometry' back into 'x' 'y' columns
+reg_xy <- do.call(rbind, st_geometry(reg_km)) %>% 
+     as_tibble() %>% setNames(c("x","y"))
+
+reg_xy <-  cbind(reg_km[,3],reg_xy)
+
+#Bathymetry
+sd_bf<-st_as_sf(bf, coords = c("x","y"), crs = 4326)
+#Project into WGS84
+bf_km = st_transform(sd_bf, "+proj=utm +zone=52N +datum=WGS84 +units=km")
+#Transform 'geometry' back into 'x' 'y' columns
+bf_xy <- do.call(rbind, st_geometry(bf_km)) %>% 
+     as_tibble() %>% setNames(c("x","y")) 
+
+ bf_xy <-  cbind(bf_km[,1],bf_xy)
+
+```
+
+Transformations can often distort the data so it is important to check that they still look the same when plotted
+
+```{r Map UTM transformation}
+plot(st_geometry(IR_km), col = sf.colors(12, categorical = TRUE), border = 'grey', 
+     axes = TRUE)
+plot(st_geometry(st_centroid(IR_km)), pch = 3, col = 'red', add = TRUE)
+plot(bis_km,pch = 16, cex = 0.1, col = 'black', add=TRUE)
+```
+
+The Bismal samples still outline the japanese coast and follow the Mariana-Izu-Bonin Arc and the InterRidge vent sites still occur along tectonic arcs and back arcs, overlapping with Bismal
+
+Now create a circle buffer with a 5km buffer around each IR vent location. Then combine the data from the IR for the vent wth the occurence data from all Bismal samples located within the buffer
+
+```{r Create vent buffer}
+
+#Create a 5km Buffer
+IR_buffer = st_buffer(IR_km, 5)
+
+#Trim the BISMaL samples to only include those within a vent buffer (Just like `Spatial Join in Arc GIS)
+IR_bis = st_intersection(IR_buffer, bis_km)
+
+```
+Check how many unique spaecies and vent sites are retained within this data-set that has removed all Bismal samples outside of the buffer
+```{r summary of buffered datase}
+summary(unique(IR_bis$scientificName))
+summary(unique(IR_bis$Name.ID))
+```
+Take a look at the buffer and bismal point data up close (in Okinawa) using ggplot so as to label
+```{r }
+o.e <- extent(raster(xmn = -100, xmx = 600, ymn = 2000, ymx = 3500))
+
+oki_buf<-st_crop(IR_buffer, o.e)
+oki_bis<-st_crop(bis_km, o.e)
+
+```
+
+```{#r map plot oki buffers and bis samples}
+
+plot(st_geometry(oki_buf), col = sf.colors(12, categorical = TRUE), border = 'grey', 
+     axes = TRUE)
+plot(st_geometry(st_centroid(IR_km)), pch = 3, col = 'red', add = TRUE)
+
+plot(st_geometry(st_centroid(oki_bis)), cex = 0.2, pch = 16, col = 'orange', add = TRUE)
+
+
+```
+
+Can see that there is some clustering of Bismal samples inside vent sites as is to be expected from targeted sampling of known vent sites.
+
+Take a closer look 
+
+Plot wth ggplot and ggsflabel (https://yutannihilation.github.io/ggsflabel/)
+```{r Map N. Oki. vent buffer and full Bis. samples}
+#devtools::install_github("yutannihilation/ggsflabel")
+library(ggsflabel)
+library(gghighlight)
+
+#Trim the bathymetry data to only include contours at selected depths eg. 150m
+bf_150<- subset(bf_km, z  == seq(-100, -2000,- 150))
+
+# make plot
+ggplot()+
+
+
+
+  # add vent buffers
+  geom_sf(data = oki_buf) + 
+
+    # add bismal samples 
+  geom_sf(data = oki_bis, colour = "orange", 
+             stroke = .5, size = 0.1, 
+             alpha = 1, shape = 21) + 
+  
+
+ #add sample labels but be careful not to include too many samples
+  geom_sf_label_repel(data = oki_buf, aes(label = Name.ID),
+                        force = 100, nudge_x = -2) +
+
+   #focus on a region of interest e.g. N.Okinawa site
+    coord_sf(xlim = c(200,400), ylim = c(2900, 3100), expand = FALSE) +
+  
+    theme_classic() +
+  
+  labs(
+    x = "Long.",              # x axis title
+    y = "Lat."  # y axis title
+
+  )+
+
+ 
+  
+  ggtitle(" N.Okinawa InterRidge Vents 5km buffer and Bismal samples")+
+    theme(plot.title = element_text(hjust = 0.5))
+```
+
+Plot a particular vent site of interest, for example Yokosuka
+
+```{r Map Yukosuka vent buffer and labelled Bis. samples}
+#devtools::install_github("yutannihilation/ggsflabel")
+library(ggsflabel)
+library(gghighlight)
+
+#Trim the extent of the data-sets otherwise there will be a lot of data and the plot will take some time
+
+y.e <- extent(raster(xmn = -30, xmx = 50, ymn = 2790, ymx = 2810))
+yuko_buf<-st_crop(IR_buffer, y.e)
+yuko_bis<-st_crop(bis_km, y.e)
+
+
+# make plot
+ggplot()+
+
+  
+  # add vent buffers
+  geom_sf(data = yuko_buf) + 
+
+    # add bismal samples 
+  geom_sf(data = yuko_bis, colour = "orange", 
+             stroke = .5, size = 0.1, 
+             alpha = 1, shape = 21) + 
+  
+  #add sample labels but be careful not to include too many samples
+  geom_sf_label_repel(data = yuko_bis, aes(label = scientificName),
+                        force = 100, nudge_x = -2, seed = 10, size = 2) +
+
+  #add vent labels
+  geom_sf_label(data = yuko_buf, aes(label = Name.ID), size = 3, fontface = "bold",nudge_y = 3 ,nudge_x = 8) +
+
+   #focus on a region of interest e.g. Yokosuka site
+    coord_sf(xlim = c(-30,48), ylim = c(2770, 2840), expand = FALSE) +
+  
+    theme_classic() +
+  
+  labs(
+    x = "Long.",              # x axis title
+    y = "Lat."  # y axis title
+
+  )+
+
+ 
+  
+  ggtitle(" Yukosuka  Vents 5km buffer and Bismal samples Labelled")+
+    theme(plot.title = element_text(hjust = 0.5))
+```
+I selected Yokusuka because I could see BISMaL samples within the buffer but they were not included in the final data-set. It turns out that the samples are described at too low a taxonomic resolution to be included. Below you will see that I only include samples identified to species level
+
+
+Save this data-set of all bismal occurences within the vicinity of hydrothermal vents
+```{r}
+write.csv(IR_bis, "output/bis_interridge_5kmbuffer.csv")
+```
+
+
+
+# Trim Taxa by SFDVENT
+
+
+
+Remove all occurences from BISMAL that aren't of vent species identified by sfdvent (Chapman *et al.,* 2019), described at the time as the most comprehensive database of vent-associated species
+```{r merge by taxon}
+
+datum<-merge(taxa, IR_bis, by.x = "Taxon",by.y =  "scientificName")
+str(factor(datum$Taxon))
+summary(unique(datum$Taxon))
+```
+
+Now do the same again but after **translating both BISMAL and SFDVENT species to WORMS standardised names** using the WORMS website (https://www.marinespecies.org/aphia.php?p=match) 
+
+After running it through WoRMS the first time I found that some non-matched species were due to spelling mistakes (which WoRMS can't detect).
+
+After finding the spelling mistakes, change them manually befor exporting them again
+```{r }
+
+#Planktotalea lamellibrachiae -> No Known Species Name
+
+#Parasphingopyxis lamellibrachiae -> No Known Species Name
+
+#Psychrobium conchae ->  No Known Species Name
+
+#Truro coronatus coronatus -> Turbo coronatus
+IR_bis$scientificName <- gsub('Truro coronatus coronatus', 'Turbo coronatus', IR_bis$scientificName)
+
+#Oncaea conifera coronatus -> Oncaea furcula 
+IR_bis$scientificName <- gsub('Oncaea conifera coronatus', 'Oncaea furcula ', IR_bis$scientificName)
+
+
+```
+
+Write the unique species names of the BISMaL and sFDvent database as .xlsx format as that is most easily read by the WoRMS Taxon match website. Also for some reason it works better on Safari than chrome...
+
+```{r write files for translation in WoRMS}
+
+# xlsx format is better with the worms matching software
+library(openxlsx)
+
+write.xlsx(unique(IR_bis$scientificName), "output/bis_IRbuffer_sp.xlsx", row.names = FALSE)
+write.xlsx(unique(taxa$Taxon), "output/sfdvent_sp.xlsx", row.names = FALSE)
+
+```
+
+ 
+**After running the species lists through WoRMS** import the new datasets with 'accepted names' from where you saved them
+```{r IN PROCESS}
+w_IR_bis_sp<-read_excel("output/bis_irbuffer_sp_matched.xlsx")
+w_taxa_sp <-read_excel("output/sfdvent_sp_matched.xlsx")
+
+```
+Combine accepted names with occurence records
+```{r}
+#Match all the accepted species names from the WoRMS translated BISMaL species list to the BISMaL occurences 
+w_IR_bis<-merge(IR_bis, w_IR_bis_sp, by.x = "scientificName", by.y = "ScientificName...1")
+```
+
+Now all BIS occurences have a matching WorMS accepted name, match them to the SFdvent accepted names. And check how many unique vent sites and species we are left with.
+
+```{r}
+#Merge accepted bis names with accepted WoRMS names to effectively remove all BIS occurences that don't match
+datum1<-merge( w_IR_bis, w_taxa_sp, by.x = "ScientificName_accepted",by.y =  "ScientificName_accepted")
+
+#Translate species name to a factor from a character
+str(factor(datum1$ScientificName_accepted))
+#Check how many unique species we are left with
+summary(unique(datum1$ScientificName_accepted))
+
+#Translate vent name to a factor from a character
+str(factor(datum1$Name.ID))
+#Check how many unique vent sites we are left with
+summary(unique(datum1$Name.ID))
+
+```
+
+Trim and save this dataset that represents all BISMaL occurences of species that match those identified as vent-associated in the SFDVENT database (once both are converted to accepted names through WoRMS) and are found within 5km of a vent site registered on the InterRidge database (ver.3.4)
+
+From this point on the column 'species' will contain the WoRMS accepted name while the previous name used in the BISMaL data-set will be retained as 'bis_scientificName' for reference
+```{r }
+
+#Filter out additional columns created in the merging process
+datum1 <- datum1[c ("ScientificName_accepted","family", "genus","specificEpithet","scientificName", "locality", "geometry", "eventDate", "fieldNumber", "institutionCode", "datasetName", "basisOfRecord", "references", "occurrenceID", "catalogNumber", "recordNumber", "recordedBy", "BISMaLtaxonID", "Name.ID")]
+
+#Re-name the columns 
+names(datum1)<-list("species","bis_family", "bis_genus","bis_specificEpithet","bis_scientificName", "locality", "geometry", "eventDate", "fieldNumber", "institutionCode", "datasetName", "basisOfRecord", "references", "occurrenceID", "catalogNumber", "recordNumber", "recordedBy", "BISMaLtaxonID", "vent_IR")
+
+#Re-integrate the interridge data from the original data-set
+bis_ir_sfd_vent<-merge(datum1, vent, by.x ="vent_IR", by.y = "Name.ID" )
+
+write.csv(bis_ir_sfd_vent,"output/bis_by_IR_sfdvent.csv")
+```
+
+# Add occurences from Literature
+
+Import species by site matrices from various sources, transform them into lists of occurences, combine them with the above 'BISMaL-by-InterRidge-by-SFdvent' data-set and then transform them into a site-by-species matrix
+
+**I have removed the rest of the script below this point as it includes data from Tunnicliffe and Giguere **
+.... 
